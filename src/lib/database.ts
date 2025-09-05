@@ -20,12 +20,20 @@ export async function getConnection() {
 }
 
 export async function initializeDatabase() {
-  const connection = await getConnection();
+  // First, create connection without database to create the database
+  const tempConnection = await mysql.createConnection({
+    host: dbConfig.host,
+    user: dbConfig.user,
+    password: dbConfig.password,
+  });
   
   try {
     // Create database if it doesn't exist
-    await connection.execute(`CREATE DATABASE IF NOT EXISTS ${dbConfig.database}`);
-    await connection.execute(`USE ${dbConfig.database}`);
+    await tempConnection.execute(`CREATE DATABASE IF NOT EXISTS ${dbConfig.database}`);
+    await tempConnection.end();
+    
+    // Now get connection with the database specified
+    const connection = await getConnection();
     
     // Create topics table
     await connection.execute(`

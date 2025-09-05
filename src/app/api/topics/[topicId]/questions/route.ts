@@ -3,10 +3,11 @@ import { getConnection } from '@/lib/database';
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { topicId: string } }
+  { params }: { params: Promise<{ topicId: string }> }
 ) {
   try {
-    const topicId = parseInt(params.topicId);
+    const { topicId: topicIdParam } = await params;
+    const topicId = parseInt(topicIdParam);
     
     if (isNaN(topicId)) {
       return NextResponse.json(
