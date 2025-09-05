@@ -16,13 +16,13 @@ export async function GET(
       );
     }
     
-    const connection = await getConnection();
-    const [rows] = await connection.execute(
+    const pool = await getConnection();
+    const result = await pool.query(
       'SELECT * FROM questions WHERE topic_id = ? ORDER BY difficulty, created_at',
       [topicId]
     );
     
-    return NextResponse.json(rows);
+    return NextResponse.json(result.rows ?? result);
   } catch (error) {
     console.error('Error fetching questions:', error);
     return NextResponse.json(

@@ -17,6 +17,7 @@ export default function Navbar({ onGenerateQuestion, showCustomTopic }: NavbarPr
 
   const navItems = [
     { name: 'Home', href: '#', icon: Home },
+    { name: 'Playground', href: '/playground', icon: Database },
     { name: 'Topics', href: '#topics', icon: BookOpen },
     { name: 'Practice', href: '#practice', icon: Target },
     { name: 'Leaderboard', href: '#leaderboard', icon: Trophy },

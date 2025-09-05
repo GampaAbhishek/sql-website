@@ -1,303 +1,452 @@
-import mysql from 'mysql2/promise';
+import { Pool, PoolClient } from 'pg';
 
 const dbConfig = {
-  host: process.env.DB_HOST || 'localhost',
-  user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD || '',
-  database: process.env.DB_NAME || 'sql_practice',
-  waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0,
+  connectionString: process.env.DATABASE_URL,
+  // Fallback to individual components if DATABASE_URL is not set
+  host: process.env.POSTGRES_HOST || 'localhost',
+  port: parseInt(process.env.POSTGRES_PORT || '5432'),
+  user: process.env.POSTGRES_USER || 'postgres',
+  password: process.env.POSTGRES_PASSWORD || '',
+  database: process.env.POSTGRES_DB || 'sql_practice_hub',
+  // Connection pool settings
+  max: 20, // Maximum number of connections
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 2000,
+  // SSL settings for production
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
 };
 
-let pool: mysql.Pool;
+let pool: Pool;
 
-export async function getConnection() {
+export async function getConnection(): Promise<Pool> {
   if (!pool) {
-    pool = mysql.createPool(dbConfig);
+    pool = new Pool(process.env.DATABASE_URL ? { connectionString: process.env.DATABASE_URL } : dbConfig);
+    
+    // Test the connection
+    try {
+      const client = await pool.connect();
+      console.log('✅ Database connected successfully');
+      client.release();
+    } catch (error) {
+      console.error('❌ Database connection failed:', error);
+      throw error;
+    }
   }
   return pool;
 }
 
+export async function getClient(): Promise<PoolClient> {
+  const pool = await getConnection();
+  return pool.connect();
+}
+
+// Initialize database with the new schema
 export async function initializeDatabase() {
-  // First, create connection without database to create the database
-  const tempConnection = await mysql.createConnection({
-    host: dbConfig.host,
-    user: dbConfig.user,
-    password: dbConfig.password,
-  });
+  const client = await getClient();
   
   try {
-    // Create database if it doesn't exist
-    await tempConnection.execute(`CREATE DATABASE IF NOT EXISTS ${dbConfig.database}`);
-    await tempConnection.end();
+    // Enable UUID extension
+    await client.query('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"');
     
-    // Now get connection with the database specified
-    const connection = await getConnection();
+    console.log('✅ Database extensions enabled');
+    console.log('📋 Database schema should be initialized separately using database-schema-final.sql');
+    console.log('   Run: psql -d sql_practice_hub -f database-schema-final.sql');
     
-    // Create topics table
-    await connection.execute(`
-      CREATE TABLE IF NOT EXISTS topics (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        name VARCHAR(255) NOT NULL UNIQUE,
-        description TEXT,
-        level ENUM('beginner', 'intermediate', 'advanced', 'expert') DEFAULT 'intermediate',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-    
-    // Create questions table
-    await connection.execute(`
-      CREATE TABLE IF NOT EXISTS questions (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        topic_id INT,
-        title VARCHAR(500) NOT NULL,
-        description TEXT,
-        difficulty ENUM('easy', 'medium', 'hard') DEFAULT 'medium',
-        expected_query TEXT,
-        test_cases JSON,
-        schema_setup TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (topic_id) REFERENCES topics(id) ON DELETE CASCADE
-      )
-    `);
-    
-    // Create user_submissions table
-    await connection.execute(`
-      CREATE TABLE IF NOT EXISTS user_submissions (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        question_id INT,
-        user_query TEXT NOT NULL,
-        result JSON,
-        is_correct BOOLEAN DEFAULT FALSE,
-        execution_time DECIMAL(10,4),
-        submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (question_id) REFERENCES questions(id) ON DELETE CASCADE
-      )
-    `);
-    
-    console.log('Database initialized successfully');
   } catch (error) {
-    console.error('Error initializing database:', error);
+    console.error('❌ Error initializing database:', error);
     throw error;
+  } finally {
+    client.release();
   }
 }
 
+// Seed database with sample data (extends the schema's sample data)
 export async function seedDatabase() {
-  const connection = await getConnection();
+  const client = await getClient();
   
   try {
-    // Insert default topics - Basic to Advanced
-    const topics = [
-      // Beginner Topics
-      { name: 'Basic SELECT', description: 'Simple SELECT statements, WHERE clauses, and basic filtering', level: 'beginner' },
-      { name: 'Sorting & Limiting', description: 'ORDER BY, LIMIT, and DISTINCT clauses', level: 'beginner' },
-      { name: 'Basic Functions', description: 'String functions, math functions, and date functions', level: 'beginner' },
-      { name: 'Data Types', description: 'Understanding SQL data types and conversions', level: 'beginner' },
-      
-      // Intermediate Topics
-      { name: 'INNER JOINs', description: 'Basic JOIN operations between tables', level: 'intermediate' },
-      { name: 'OUTER JOINs', description: 'LEFT, RIGHT, and FULL OUTER JOINs', level: 'intermediate' },
-      { name: 'GROUP BY & HAVING', description: 'Grouping data and aggregate functions', level: 'intermediate' },
-      { name: 'Basic Subqueries', description: 'Simple nested queries and subqueries', level: 'intermediate' },
-      { name: 'UNION Operations', description: 'Combining results from multiple queries', level: 'intermediate' },
-      { name: 'Data Modification', description: 'INSERT, UPDATE, DELETE operations', level: 'intermediate' },
-      
-      // Advanced Topics
-      { name: 'Complex JOINs', description: 'Multi-table JOINs and self-joins', level: 'advanced' },
-      { name: 'Correlated Subqueries', description: 'Advanced subqueries that reference outer query', level: 'advanced' },
-      { name: 'Window Functions', description: 'ROW_NUMBER, RANK, LAG, LEAD, and partitioning', level: 'advanced' },
-      { name: 'Common Table Expressions (CTEs)', description: 'WITH clauses and recursive CTEs', level: 'advanced' },
-      { name: 'Advanced Aggregations', description: 'ROLLUP, CUBE, and GROUPING SETS', level: 'advanced' },
-      { name: 'Pivot & Unpivot', description: 'Data transformation and restructuring', level: 'advanced' },
-      { name: 'Stored Procedures', description: 'Creating and using stored procedures', level: 'advanced' },
-      { name: 'Views & Materialized Views', description: 'Creating and managing database views', level: 'advanced' },
-      { name: 'Indexes & Performance', description: 'Query optimization, indexing strategies', level: 'advanced' },
-      { name: 'Transactions & Concurrency', description: 'ACID properties, locking, and isolation levels', level: 'advanced' },
-      
-      // Expert Topics
-      { name: 'Query Optimization', description: 'Advanced performance tuning and execution plans', level: 'expert' },
-      { name: 'Database Design', description: 'Normalization, denormalization, and schema design', level: 'expert' },
-      { name: 'Advanced Analytics', description: 'Statistical functions and advanced analytics', level: 'expert' },
-      { name: 'JSON & XML Data', description: 'Working with semi-structured data types', level: 'expert' },
-      { name: 'Temporal Data', description: 'Working with time-series and temporal data', level: 'expert' },
-    ];
+    // Check if data already exists
+    const existingLessons = await client.query('SELECT COUNT(*) as count FROM lessons');
+    const lessonCount = parseInt(existingLessons.rows[0].count);
     
-    for (const topic of topics) {
-      await connection.execute(
-        'INSERT IGNORE INTO topics (name, description, level) VALUES (?, ?, ?)',
-        [topic.name, topic.description, topic.level]
-      );
+    if (lessonCount > 3) {
+      console.log('✅ Database already seeded with lesson data');
+      return;
     }
     
-    // Insert sample questions across different levels
-    const sampleQuestions = [
-      // Beginner Level
+    // Insert additional lessons for development
+    const additionalLessons = [
       {
-        topic: 'Basic SELECT',
-        title: 'Find all employees with salary greater than 50000',
-        description: 'Write a query to select all employees whose salary is greater than 50000.',
-        difficulty: 'easy',
-        expectedQuery: 'SELECT * FROM employees WHERE salary > 50000',
-        schemaSetup: `
-          CREATE TABLE employees (
-            id INT PRIMARY KEY,
-            name VARCHAR(100),
-            salary DECIMAL(10,2),
-            department_id INT
-          );
-          INSERT INTO employees VALUES 
-          (1, 'John Doe', 60000, 1),
-          (2, 'Jane Smith', 45000, 2),
-          (3, 'Bob Johnson', 75000, 1),
-          (4, 'Alice Brown', 55000, 3);
-        `,
-        testCases: [
-          { input: 'SELECT * FROM employees WHERE salary > 50000', expectedRows: 3 },
-          { input: 'SELECT name FROM employees WHERE salary > 50000', expectedColumns: ['name'] }
-        ]
-      },
-      {
-        topic: 'Sorting & Limiting',
-        title: 'Top 3 highest paid employees',
-        description: 'Write a query to find the top 3 highest paid employees ordered by salary in descending order.',
-        difficulty: 'easy',
-        expectedQuery: 'SELECT name, salary FROM employees ORDER BY salary DESC LIMIT 3',
-        schemaSetup: `
-          CREATE TABLE employees (
-            id INT PRIMARY KEY,
-            name VARCHAR(100),
-            salary DECIMAL(10,2)
-          );
-          INSERT INTO employees VALUES 
-          (1, 'John', 60000), (2, 'Jane', 75000), (3, 'Bob', 45000),
-          (4, 'Alice', 80000), (5, 'Charlie', 65000);
-        `,
-        testCases: [
-          { input: 'SELECT name, salary FROM employees ORDER BY salary DESC LIMIT 3', expectedRows: 3 }
-        ]
-      },
-      // Intermediate Level
-      {
-        topic: 'INNER JOINs',
-        title: 'Employee Department Join',
-        description: 'Write a query to get employee names with their department names using INNER JOIN.',
-        difficulty: 'medium',
-        expectedQuery: 'SELECT e.name, d.department_name FROM employees e INNER JOIN departments d ON e.department_id = d.id',
-        schemaSetup: `
-          CREATE TABLE departments (
-            id INT PRIMARY KEY,
-            department_name VARCHAR(100)
-          );
-          CREATE TABLE employees (
-            id INT PRIMARY KEY,
-            name VARCHAR(100),
-            department_id INT
-          );
-          INSERT INTO departments VALUES (1, 'Engineering'), (2, 'Marketing'), (3, 'Sales');
-          INSERT INTO employees VALUES (1, 'John', 1), (2, 'Jane', 2), (3, 'Bob', 1);
-        `,
-        testCases: [
-          { input: 'SELECT e.name, d.department_name FROM employees e INNER JOIN departments d ON e.department_id = d.id', expectedRows: 3 }
-        ]
-      },
-      {
-        topic: 'GROUP BY & HAVING',
-        title: 'Department salary statistics',
-        description: 'Find departments with average salary greater than 60000. Show department name and average salary.',
-        difficulty: 'medium',
-        expectedQuery: 'SELECT d.department_name, AVG(e.salary) as avg_salary FROM employees e JOIN departments d ON e.department_id = d.id GROUP BY d.department_name HAVING AVG(e.salary) > 60000',
-        schemaSetup: `
-          CREATE TABLE departments (
-            id INT PRIMARY KEY,
-            department_name VARCHAR(100)
-          );
-          CREATE TABLE employees (
-            id INT PRIMARY KEY,
-            name VARCHAR(100),
-            salary DECIMAL(10,2),
-            department_id INT
-          );
-          INSERT INTO departments VALUES (1, 'Engineering'), (2, 'Marketing'), (3, 'Sales');
-          INSERT INTO employees VALUES 
-          (1, 'John', 70000, 1), (2, 'Jane', 65000, 1), (3, 'Bob', 50000, 2), 
-          (4, 'Alice', 75000, 1), (5, 'Charlie', 55000, 3);
-        `,
-        testCases: [
-          { input: 'SELECT d.department_name, AVG(e.salary) FROM employees e JOIN departments d ON e.department_id = d.id GROUP BY d.department_name HAVING AVG(e.salary) > 60000', expectedRows: 1 }
-        ]
-      },
-      // Advanced Level
-      {
-        topic: 'Window Functions',
-        title: 'Employee salary ranking within departments',
-        description: 'Rank employees by salary within their departments using window functions.',
-        difficulty: 'hard',
-        expectedQuery: 'SELECT name, salary, department_id, RANK() OVER (PARTITION BY department_id ORDER BY salary DESC) as salary_rank FROM employees',
-        schemaSetup: `
-          CREATE TABLE employees (
-            id INT PRIMARY KEY,
-            name VARCHAR(100),
-            salary DECIMAL(10,2),
-            department_id INT
-          );
-          INSERT INTO employees VALUES 
-          (1, 'John', 70000, 1), (2, 'Jane', 65000, 1), (3, 'Bob', 50000, 2), 
-          (4, 'Alice', 75000, 1), (5, 'Charlie', 55000, 2);
-        `,
-        testCases: [
-          { input: 'SELECT name, salary, department_id, RANK() OVER (PARTITION BY department_id ORDER BY salary DESC) as salary_rank FROM employees', expectedRows: 5 }
-        ]
-      },
-      {
-        topic: 'Common Table Expressions (CTEs)',
-        title: 'Department hierarchy with CTEs',
-        description: 'Use a CTE to find all employees in departments with more than 2 employees.',
-        difficulty: 'hard',
-        expectedQuery: 'WITH dept_counts AS (SELECT department_id, COUNT(*) as emp_count FROM employees GROUP BY department_id HAVING COUNT(*) > 2) SELECT e.name, e.salary FROM employees e INNER JOIN dept_counts dc ON e.department_id = dc.department_id',
-        schemaSetup: `
-          CREATE TABLE employees (
-            id INT PRIMARY KEY,
-            name VARCHAR(100),
-            salary DECIMAL(10,2),
-            department_id INT
-          );
-          INSERT INTO employees VALUES 
-          (1, 'John', 70000, 1), (2, 'Jane', 65000, 1), (3, 'Bob', 50000, 1), 
-          (4, 'Alice', 75000, 2), (5, 'Charlie', 55000, 2);
-        `,
-        testCases: [
-          { input: 'WITH dept_counts AS (SELECT department_id, COUNT(*) as emp_count FROM employees GROUP BY department_id HAVING COUNT(*) > 2) SELECT e.name FROM employees e INNER JOIN dept_counts dc ON e.department_id = dc.department_id', expectedRows: 3 }
-        ]
-      }
-    ];
-    
-    for (const question of sampleQuestions) {
-      // Get topic ID
-      const [topicRows] = await connection.execute(
-        'SELECT id FROM topics WHERE name = ?',
-        [question.topic]
-      ) as [any[], any];
-      
-      if (topicRows.length > 0) {
-        await connection.execute(
-          'INSERT IGNORE INTO questions (topic_id, title, description, difficulty, expected_query, schema_setup, test_cases) VALUES (?, ?, ?, ?, ?, ?, ?)',
-          [
-            topicRows[0].id,
-            question.title,
-            question.description,
-            question.difficulty,
-            question.expectedQuery,
-            question.schemaSetup,
-            JSON.stringify(question.testCases)
+        title: 'Advanced JOIN Techniques',
+        slug: 'advanced-joins',
+        description: 'Master complex JOIN operations including self-joins and multiple table joins',
+        content: JSON.stringify({
+          sections: [
+            {
+              title: 'Self Joins',
+              content: 'Learn how to join a table with itself to find relationships within the same table'
+            },
+            {
+              title: 'Multiple Table Joins',
+              content: 'Combine data from three or more tables efficiently'
+            }
           ]
-        );
+        }),
+        difficulty: 'intermediate',
+        category: 'joins',
+        order_index: 4,
+        estimated_time_minutes: 45,
+        learning_objectives: ['Master self-join techniques', 'Combine multiple tables', 'Optimize join performance'],
+        tags: ['joins', 'self-join', 'multiple-tables']
+      },
+      {
+        title: 'Subqueries and CTEs',
+        slug: 'subqueries-ctes',
+        description: 'Learn about subqueries and Common Table Expressions for complex data retrieval',
+        content: JSON.stringify({
+          sections: [
+            {
+              title: 'Subquery Types',
+              content: 'Understand scalar, row, and table subqueries'
+            },
+            {
+              title: 'Common Table Expressions',
+              content: 'Use WITH clauses for more readable complex queries'
+            }
+          ]
+        }),
+        difficulty: 'advanced',
+        category: 'advanced-queries',
+        order_index: 1,
+        estimated_time_minutes: 50,
+        learning_objectives: ['Write efficient subqueries', 'Use CTEs effectively', 'Choose between subqueries and joins'],
+        tags: ['subqueries', 'cte', 'with-clause']
+      }
+    ];
+    
+    for (const lesson of additionalLessons) {
+      await client.query(`
+        INSERT INTO lessons (title, slug, description, content, difficulty, category, order_index, 
+                           estimated_time_minutes, learning_objectives, tags)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        ON CONFLICT (slug) DO NOTHING
+      `, [
+        lesson.title, lesson.slug, lesson.description, lesson.content,
+        lesson.difficulty, lesson.category, lesson.order_index,
+        lesson.estimated_time_minutes, lesson.learning_objectives, lesson.tags
+      ]);
+    }
+    
+    // Insert additional challenges
+    const additionalChallenges = [
+      {
+        title: 'Employee Manager Hierarchy',
+        slug: 'employee-manager-hierarchy',
+        description: 'Find all employees and their direct managers using self-join',
+        difficulty: 'intermediate',
+        category: 'joins',
+        points: 15,
+        database_schema: JSON.stringify({
+          tables: [
+            {
+              name: 'employees',
+              columns: [
+                { name: 'id', type: 'INTEGER', primary_key: true },
+                { name: 'name', type: 'VARCHAR(100)' },
+                { name: 'manager_id', type: 'INTEGER' },
+                { name: 'department', type: 'VARCHAR(50)' }
+              ],
+              data: [
+                { id: 1, name: 'John CEO', manager_id: null, department: 'Executive' },
+                { id: 2, name: 'Jane Manager', manager_id: 1, department: 'Engineering' },
+                { id: 3, name: 'Bob Developer', manager_id: 2, department: 'Engineering' },
+                { id: 4, name: 'Alice Developer', manager_id: 2, department: 'Engineering' }
+              ]
+            }
+          ]
+        }),
+        expected_output: JSON.stringify({
+          columns: ['employee_name', 'manager_name'],
+          rows: [
+            ['Jane Manager', 'John CEO'],
+            ['Bob Developer', 'Jane Manager'],
+            ['Alice Developer', 'Jane Manager']
+          ]
+        }),
+        solution_query: `SELECT e.name as employee_name, m.name as manager_name 
+                        FROM employees e 
+                        LEFT JOIN employees m ON e.manager_id = m.id 
+                        WHERE e.manager_id IS NOT NULL`,
+        hints: [
+          'Use a self-join to connect employees with their managers',
+          'Join the employees table with itself using manager_id',
+          'Use LEFT JOIN to handle employees without managers'
+        ]
+      }
+    ];
+    
+    for (const challenge of additionalChallenges) {
+      await client.query(`
+        INSERT INTO challenges (title, slug, description, difficulty, category, points, 
+                              database_schema, expected_output, solution_query, hints)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        ON CONFLICT (slug) DO NOTHING
+      `, [
+        challenge.title, challenge.slug, challenge.description, challenge.difficulty,
+        challenge.category, challenge.points, challenge.database_schema,
+        challenge.expected_output, challenge.solution_query, challenge.hints
+      ]);
+    }
+    
+    console.log('✅ Additional development data seeded successfully');
+    
+  } catch (error) {
+    console.error('❌ Error seeding database:', error);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+// Utility functions for the new schema
+
+// User management
+export async function createUser(userData: {
+  email: string;
+  username: string;
+  password_hash: string;
+  name: string;
+  role?: string;
+}) {
+  const client = await getClient();
+  try {
+    const result = await client.query(`
+      INSERT INTO users (email, username, password_hash, name, role)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING id, email, username, name, role, created_at
+    `, [userData.email, userData.username, userData.password_hash, userData.name, userData.role || 'student']);
+    
+    return result.rows[0];
+  } finally {
+    client.release();
+  }
+}
+
+export async function getUserByEmail(email: string) {
+  const client = await getClient();
+  try {
+    const result = await client.query('SELECT * FROM users WHERE email = $1 AND is_active = true', [email]);
+    return result.rows[0] || null;
+  } finally {
+    client.release();
+  }
+}
+
+export async function getUserById(id: string) {
+  const client = await getClient();
+  try {
+    const result = await client.query('SELECT * FROM users WHERE id = $1 AND is_active = true', [id]);
+    return result.rows[0] || null;
+  } finally {
+    client.release();
+  }
+}
+
+// Session management
+export async function createSession(userId: string, token: string, refreshToken?: string) {
+  const client = await getClient();
+  try {
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+    const refreshExpiresAt = refreshToken ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) : null; // 7 days
+    
+    const result = await client.query(`
+      INSERT INTO sessions (user_id, token, refresh_token, expires_at, refresh_expires_at)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING id, token, expires_at
+    `, [userId, token, refreshToken, expiresAt, refreshExpiresAt]);
+    
+    return result.rows[0];
+  } finally {
+    client.release();
+  }
+}
+
+export async function getSessionByToken(token: string) {
+  const client = await getClient();
+  try {
+    const result = await client.query(`
+      SELECT s.*, u.id as user_id, u.email, u.name, u.role
+      FROM sessions s
+      JOIN users u ON s.user_id = u.id
+      WHERE s.token = $1 AND s.is_active = true AND s.expires_at > NOW()
+    `, [token]);
+    
+    return result.rows[0] || null;
+  } finally {
+    client.release();
+  }
+}
+
+// Learning path functions
+export async function getUserProgress(userId: string, lessonId?: string) {
+  const client = await getClient();
+  try {
+    let query = `
+      SELECT up.*, l.title, l.category, l.difficulty
+      FROM user_progress up
+      JOIN lessons l ON up.lesson_id = l.id
+      WHERE up.user_id = $1
+    `;
+    const params = [userId];
+    
+    if (lessonId) {
+      query += ' AND up.lesson_id = $2';
+      params.push(lessonId);
+    }
+    
+    query += ' ORDER BY l.category, l.order_index';
+    
+    const result = await client.query(query, params);
+    return lessonId ? result.rows[0] || null : result.rows;
+  } finally {
+    client.release();
+  }
+}
+
+export async function updateUserProgress(userId: string, lessonId: string, progressData: {
+  status?: string;
+  accuracy_percentage?: number;
+  time_spent_minutes?: number;
+  notes?: string;
+}) {
+  const client = await getClient();
+  try {
+    const updateFields: string[] = [];
+    const values: any[] = [userId, lessonId];
+    let paramIndex = 3;
+    
+    Object.entries(progressData).forEach(([key, value]) => {
+      if (value !== undefined) {
+        updateFields.push(`${key} = $${paramIndex}`);
+        values.push(value);
+        paramIndex++;
+      }
+    });
+    
+    if (updateFields.length === 0) return null;
+    
+    updateFields.push(`updated_at = NOW()`);
+    
+    if (progressData.status === 'completed') {
+      updateFields.push(`completed_at = NOW()`);
+    }
+    
+    const query = `
+      INSERT INTO user_progress (user_id, lesson_id, ${Object.keys(progressData).join(', ')}, updated_at)
+      VALUES ($1, $2, ${Object.keys(progressData).map((_, i) => `$${i + 3}`).join(', ')}, NOW())
+      ON CONFLICT (user_id, lesson_id)
+      DO UPDATE SET ${updateFields.join(', ')}
+      RETURNING *
+    `;
+    
+    const result = await client.query(query, values);
+    return result.rows[0];
+  } finally {
+    client.release();
+  }
+}
+
+// Challenge functions
+export async function getChallenges(filters?: {
+  difficulty?: string;
+  category?: string;
+  limit?: number;
+  offset?: number;
+}) {
+  const client = await getClient();
+  try {
+    let query = 'SELECT * FROM challenges WHERE is_published = true';
+    const params: any[] = [];
+    let paramIndex = 1;
+    
+    if (filters?.difficulty) {
+      query += ` AND difficulty = $${paramIndex}`;
+      params.push(filters.difficulty);
+      paramIndex++;
+    }
+    
+    if (filters?.category) {
+      query += ` AND category = $${paramIndex}`;
+      params.push(filters.category);
+      paramIndex++;
+    }
+    
+    query += ' ORDER BY difficulty, category, created_at';
+    
+    if (filters?.limit) {
+      query += ` LIMIT $${paramIndex}`;
+      params.push(filters.limit);
+      paramIndex++;
+      
+      if (filters?.offset) {
+        query += ` OFFSET $${paramIndex}`;
+        params.push(filters.offset);
       }
     }
     
-    console.log('Database seeded successfully');
+    const result = await client.query(query, params);
+    return result.rows;
+  } finally {
+    client.release();
+  }
+}
+
+export async function saveQuery(userId: string, sessionId: string, queryData: {
+  query_text: string;
+  result?: any;
+  status: string;
+  execution_time_ms?: number;
+  error_message?: string;
+}) {
+  const client = await getClient();
+  try {
+    const result = await client.query(`
+      INSERT INTO queries (user_id, session_id, query_text, result, status, execution_time_ms, error_message)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING *
+    `, [
+      userId, sessionId, queryData.query_text, 
+      queryData.result ? JSON.stringify(queryData.result) : null,
+      queryData.status, queryData.execution_time_ms, queryData.error_message
+    ]);
+    
+    return result.rows[0];
+  } finally {
+    client.release();
+  }
+}
+
+// Error handling wrapper
+export async function executeQuery<T>(
+  queryFn: (client: PoolClient) => Promise<T>
+): Promise<T> {
+  const client = await getClient();
+  try {
+    return await queryFn(client);
+  } finally {
+    client.release();
+  }
+}
+
+// Database health check
+export async function checkDatabaseHealth() {
+  try {
+    const client = await getClient();
+    const result = await client.query('SELECT 1 as health_check');
+    client.release();
+    return { healthy: true, timestamp: new Date().toISOString() };
   } catch (error) {
-    console.error('Error seeding database:', error);
-    throw error;
+    console.error('Database health check failed:', error);
+    return { healthy: false, error: error instanceof Error ? error.message : 'Unknown error' };
   }
 }

@@ -1,33 +1,34 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getConnection } from '@/lib/database';
+import { getClient } from '@/lib/database';
 
 export async function POST() {
   try {
-    const connection = await getConnection();
+    const client = await getClient();
     
-    // Add level column to existing topics table if it doesn't exist
-    await connection.execute(`
-      ALTER TABLE topics 
-      ADD COLUMN IF NOT EXISTS level ENUM('beginner', 'intermediate', 'advanced', 'expert') DEFAULT 'intermediate' AFTER description
-    `);
-    
-    // Clear existing topics to reload with new structure
-    await connection.execute('DELETE FROM topics');
-    
-    // Re-seed with comprehensive topics
-    const topics = [
-      // Beginner Topics
-      { name: 'Basic SELECT', description: 'Simple SELECT statements, WHERE clauses, and basic filtering', level: 'beginner' },
-      { name: 'Sorting & Limiting', description: 'ORDER BY, LIMIT, and DISTINCT clauses', level: 'beginner' },
-      { name: 'Basic Functions', description: 'String functions, math functions, and date functions', level: 'beginner' },
-      { name: 'Data Types', description: 'Understanding SQL data types and conversions', level: 'beginner' },
+    try {
+      // Add level column to existing topics table if it doesn't exist
+      await client.query(`
+        ALTER TABLE topics 
+        ADD COLUMN IF NOT EXISTS level VARCHAR(20) DEFAULT 'intermediate'
+      `);
       
-      // Intermediate Topics
-      { name: 'INNER JOINs', description: 'Basic JOIN operations between tables', level: 'intermediate' },
-      { name: 'OUTER JOINs', description: 'LEFT, RIGHT, and FULL OUTER JOINs', level: 'intermediate' },
-      { name: 'GROUP BY & HAVING', description: 'Grouping data and aggregate functions', level: 'intermediate' },
-      { name: 'Basic Subqueries', description: 'Simple nested queries and subqueries', level: 'intermediate' },
-      { name: 'UNION Operations', description: 'Combining results from multiple queries', level: 'intermediate' },
+      // Clear existing topics to reload with new structure
+      await client.query('DELETE FROM topics');
+      
+      // Re-seed with comprehensive topics
+      const topics = [
+        // Beginner Topics
+        { name: 'Basic SELECT', description: 'Simple SELECT statements, WHERE clauses, and basic filtering', level: 'beginner' },
+        { name: 'Sorting & Limiting', description: 'ORDER BY, LIMIT, and DISTINCT clauses', level: 'beginner' },
+        { name: 'Basic Functions', description: 'String functions, math functions, and date functions', level: 'beginner' },
+        { name: 'Data Types', description: 'Understanding SQL data types and conversions', level: 'beginner' },
+        
+        // Intermediate Topics
+        { name: 'INNER JOINs', description: 'Basic JOIN operations between tables', level: 'intermediate' },
+        { name: 'OUTER JOINs', description: 'LEFT, RIGHT, and FULL OUTER JOINs', level: 'intermediate' },
+        { name: 'GROUP BY & HAVING', description: 'Grouping data and aggregate functions', level: 'intermediate' },
+        { name: 'Basic Subqueries', description: 'Simple nested queries and subqueries', level: 'intermediate' },
+        { name: 'UNION Operations', description: 'Combining results from multiple queries', level: 'intermediate' },
       { name: 'Data Modification', description: 'INSERT, UPDATE, DELETE operations', level: 'intermediate' },
       
       // Advanced Topics
@@ -51,8 +52,8 @@ export async function POST() {
     ];
 
     for (const topic of topics) {
-      await connection.execute(
-        'INSERT INTO topics (name, description, level) VALUES (?, ?, ?)',
+      await client.query(
+        'INSERT INTO topics (name, description, level) VALUES ($1, $2, $3)',
         [topic.name, topic.description, topic.level]
       );
     }
@@ -67,6 +68,9 @@ export async function POST() {
         expert: topics.filter(t => t.level === 'expert').length,
       }
     });
+    } finally {
+      client.release();
+    }
   } catch (error: any) {
     console.error('Error updating topics:', error);
     return NextResponse.json(

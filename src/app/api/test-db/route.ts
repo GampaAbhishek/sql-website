@@ -1,36 +1,41 @@
 import { NextRequest, NextResponse } from 'next/server';
-import mysql from 'mysql2/promise';
+import { Pool } from 'pg';
 
 export async function GET() {
   try {
-    console.log('Testing database connection...');
-    console.log('DB_HOST:', process.env.DB_HOST);
-    console.log('DB_USER:', process.env.DB_USER);
-    console.log('DB_NAME:', process.env.DB_NAME);
+    console.log('Testing PostgreSQL database connection...');
+    console.log('POSTGRES_HOST:', process.env.POSTGRES_HOST);
+    console.log('POSTGRES_USER:', process.env.POSTGRES_USER);
+    console.log('POSTGRES_DB:', process.env.POSTGRES_DB);
     
-    const connection = await mysql.createConnection({
-      host: process.env.DB_HOST || 'localhost',
-      user: process.env.DB_USER || 'root',
-      password: process.env.DB_PASSWORD || '',
-      database: process.env.DB_NAME || 'sql_practice',
-      connectTimeout: 5000,
+    // First try to connect to default postgres database to test connection
+    const pool = new Pool({
+      host: process.env.POSTGRES_HOST || 'localhost',
+      port: parseInt(process.env.POSTGRES_PORT || '5432'),
+      user: process.env.POSTGRES_USER || 'postgres',
+      password: process.env.POSTGRES_PASSWORD || '',
+      database: 'postgres', // Connect to default postgres database first
+      connectionTimeoutMillis: 5000,
     });
+
+    console.log('Connection configuration set up!');
+    
+    // Test basic query
+    const client = await pool.connect();
+    const result = await client.query('SELECT version() as version');
+    client.release();
+    await pool.end();
 
     console.log('Connection successful!');
     
-    // Test basic query
-    const [result] = await connection.execute('SELECT VERSION() as version') as [any[], any];
-    
-    await connection.end();
-    
     return NextResponse.json({
       success: true,
-      message: 'Database connection successful',
-      mysqlVersion: result[0],
+      message: 'PostgreSQL database connection successful',
+      postgresVersion: result.rows[0],
       config: {
-        host: process.env.DB_HOST || 'localhost',
-        user: process.env.DB_USER || 'root',
-        database: process.env.DB_NAME || 'sql_practice'
+        host: process.env.POSTGRES_HOST || 'localhost',
+        user: process.env.POSTGRES_USER || 'postgres',
+        database: process.env.POSTGRES_DB || 'sqlhub'
       }
     });
   } catch (error: any) {
